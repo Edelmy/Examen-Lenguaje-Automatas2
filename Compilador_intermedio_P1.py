@@ -1,4 +1,6 @@
 import re #Se importa la libreria del regex
+import os # NUEVO: sirve para revisar si existe el archivo factorial.code
+import sys # NUEVO: sirve para recibir el nombre del archivo del algoritmo desde la CMD
 
 PRECEDENCE = {'+': 1, '-': 1, '*': 2, '/': 2, '^': 3} #Prioridad de las operaciones
 PRECEDENCE['~'] = 2.5 # '~' representa el menos unario (-a) Se resuelve antes que + y -
@@ -98,12 +100,12 @@ def infix_to_postfix(expresion): #Se pasa la operación infija a posfija
     return polaca # regresa el array polaca
 
 #Genera tres direcciones y cuádrupas
-def generar_representaciones_intermedias(postfix_tokens):
+def generar_representaciones_intermedias(postfix_tokens, contador_inicial=1): # NUEVO: contador_inicial permite continuar la numeración de temporales (T1, T2...) entre varias líneas del algoritmo
     # Se definen los arrays para guardar los resultados
     pila = []  # guarda operandos y resultados temporales
     tres_direcciones = [] # guarda las tres direcciones
     cuadrupletas = [] # guarda las cuádruplas
-    contador_temporales = 1 # contador de temporales t1
+    contador_temporales = contador_inicial # contador de temporales t1
 
     for token in postfix_tokens: # recorre la expresión polaca (posfija)
         if es_operando(token): # si es un operando lo guarda directo en la pila
@@ -162,11 +164,273 @@ def procesar_expresion(expresion): # Función para obtener la expresión y ejecu
         print(f"   ({op}, {arg1}, {arg2}, {res})")
 
     print("-" * 20 + "\n")
+# algoritmo del factorial (el de la imagen); si no existe factorial.code se crea con este texto
+FACTORIAL_CODE = """def factorial(n):
+    if n==0 or n==1:
+        resultado=1
+    elif n>1:
+        resultado=n*factorial(n-1)
+    return resultado
+
+fact5=factorial(5)
+print(fact5)
+"""
+
+numero = {"T": 1, "L": 1} # lleva la cuenta del siguiente temporal (T1, T2...) y de la siguiente etiqueta (L1, L2...)
+registro = {"polaca": []} # aquí se guarda la polaca inversa de cada expresión que se encuentra en el algoritmo
+
+
+def nueva_etiqueta(): # crea L1, L2, L3...
+    etiqueta = f"L{numero['L']}"
+    numero["L"] += 1
+    return etiqueta
+
+
+def generar_llamada(nombre, argumentos, codigo, devuelve_valor): # genera los param y el call de una función
+    lugares = [expresion_a_tres(arg, codigo) for arg in argumentos if arg.strip()] # cada argumento puede ser otra expresión
+    for lugar in lugares:
+        codigo.append(f"param {lugar}")
+    llamada = f"call {nombre}, {len(lugares)}"
+    if not devuelve_valor: # por ejemplo print(), no guarda resultado
+        codigo.append(llamada)
+        return None
+    temp = f"T{numero['T']}"
+    numero["T"] += 1
+    codigo.append(f"{temp} = {llamada}")
+    return temp
+
+
+def expresion_a_tres(expresion, codigo): # convierte una expresión a tres direcciones y regresa dónde quedó el resultado
+    expresion = expresion.strip()
+    while True: # primero se resuelven las llamadas a funciones, de adentro hacia afuera
+        llamada = re.search(r"([a-zA-Z_]\w*)\(([^()]*)\)", expresion)
+        if not llamada:
+            break
+        temp = generar_llamada(llamada.group(1), llamada.group(2).split(","), codigo, True)
+        expresion = expresion[:llamada.start()] + temp + expresion[llamada.end():] # la llamada se cambia por su temporal
+    if es_operando(expresion): # si ya es un solo operando no hay nada que calcular
+        return expresion
+    postfix_tokens = infix_to_postfix(expresion) # se reutiliza el código de la práctica
+    registro["polaca"].append(f"{expresion}   →   {' '.join(postfix_tokens)}") # se guarda su polaca inversa
+    lineas_tres, _ = generar_representaciones_intermedias(postfix_tokens, numero["T"])
+    numero["T"] += len(lineas_tres) # cada instrucción usa un temporal
+    codigo.extend(lineas_tres)
+    return f"T{numero['T'] - 1}" # el último temporal tiene el resultado final
+
+
+def separar_comparacion(texto): # separa 'a >= b' en (a, >=, b)
+    m = re.fullmatch(r"(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)", texto.strip())
+    if not m:
+        raise ValueError(f"Condición no válida: '{texto.strip()}'")
+    return m.group(1), m.group(2), m.group(3)
+
+
+def comparar(parte, codigo): # resuelve los dos lados de una comparación, guarda su polaca y regresa "izq op der"
+    izq, op, der = separar_comparacion(parte)
+    lugar_izq = expresion_a_tres(izq, codigo)
+    lugar_der = expresion_a_tres(der, codigo)
+    registro["polaca"].append(f"{parte.strip()}   →   {lugar_izq} {lugar_der} {op}")
+    return f"{lugar_izq} {op} {lugar_der}"
+
+
+def condicion_a_tres(condicion, etiqueta_si, codigo): # genera los saltos de una condición (soporta 'or' y 'and')
+    if " and " in condicion: # and: si alguna parte falla se salta, si todas pasan se va al cuerpo
+        etiqueta_no = nueva_etiqueta()
+        for parte in condicion.split(" and "):
+            codigo.append(f"ifFalse {comparar(parte, codigo)} goto {etiqueta_no}")
+        codigo.append(f"goto {etiqueta_si}")
+        codigo.append(f"{etiqueta_no}:")
+        return
+    for parte in condicion.split(" or "): # or: si alguna parte se cumple se va al cuerpo
+        codigo.append(f"if {comparar(parte, codigo)} goto {etiqueta_si}")
+
+
+def traducir_cuerpo(lineas, i, codigo): # traduce el cuerpo que empieza en la línea i (todas las líneas con esa misma sangría)
+    return traducir_bloque(lineas, i, lineas[i][0], codigo)
+
+
+def traducir_bloque(lineas, i, nivel, codigo): # recorre las líneas del algoritmo según su sangría (indentación)
+    while i < len(lineas) and lineas[i][0] >= nivel:
+        sangria, texto = lineas[i]
+
+        if texto.startswith("def "): # definición de función
+            m = re.fullmatch(r"def\s+(\w+)\((.*)\):", texto)
+            codigo.append(f"func {m.group(1)}({m.group(2).strip()})")
+            i = traducir_cuerpo(lineas, i + 1, codigo)
+            codigo.append("endfunc")
+
+        elif texto.startswith("if "): # if / elif / else
+            ramas = [] # cada rama es (condición, código de su cuerpo)
+            sino = [] # código del else
+            cuerpo = []
+            i = traducir_cuerpo(lineas, i + 1, cuerpo)
+            ramas.append((texto[3:].rstrip(":").strip(), cuerpo))
+            while i < len(lineas) and lineas[i][0] == sangria and lineas[i][1].startswith(("elif ", "else:")):
+                if lineas[i][1].startswith("elif "):
+                    cuerpo = []
+                    condicion = lineas[i][1][5:].rstrip(":").strip()
+                    i = traducir_cuerpo(lineas, i + 1, cuerpo)
+                    ramas.append((condicion, cuerpo))
+                else:
+                    i = traducir_cuerpo(lineas, i + 1, sino)
+            etiquetas = [nueva_etiqueta() for _ in ramas]
+            etiqueta_sino = nueva_etiqueta()
+            etiqueta_fin = nueva_etiqueta()
+            for (condicion, _), etiqueta in zip(ramas, etiquetas): # primero se evalúan todas las condiciones
+                condicion_a_tres(condicion, etiqueta, codigo)
+            codigo.append(f"goto {etiqueta_sino}")
+            for (_, cuerpo), etiqueta in zip(ramas, etiquetas): # después van los cuerpos
+                codigo.append(f"{etiqueta}:")
+                codigo.extend(cuerpo)
+                codigo.append(f"goto {etiqueta_fin}")
+            codigo.append(f"{etiqueta_sino}:")
+            codigo.extend(sino)
+            codigo.append(f"{etiqueta_fin}:")
+
+        elif texto.startswith("while "): # ciclo while
+            condicion = texto[6:].rstrip(":").strip()
+            cuerpo = []
+            i = traducir_cuerpo(lineas, i + 1, cuerpo)
+            inicio, dentro, fin = nueva_etiqueta(), nueva_etiqueta(), nueva_etiqueta()
+            codigo.append(f"{inicio}:")
+            condicion_a_tres(condicion, dentro, codigo)
+            codigo.append(f"goto {fin}")
+            codigo.append(f"{dentro}:")
+            codigo.extend(cuerpo)
+            codigo.append(f"goto {inicio}")
+            codigo.append(f"{fin}:")
+
+        elif texto == "return" or texto.startswith("return "): # return
+            valor = texto[6:].strip()
+            codigo.append(f"return {expresion_a_tres(valor, codigo)}" if valor else "return")
+            i += 1
+
+        elif re.fullmatch(r"[a-zA-Z_]\w*\(.*\)", texto): # llamada sola, por ejemplo print(fact5)
+            m = re.fullmatch(r"([a-zA-Z_]\w*)\((.*)\)", texto)
+            generar_llamada(m.group(1), m.group(2).split(","), codigo, False)
+            i += 1
+
+        else: # asignación: variable = expresión
+            m = re.fullmatch(r"([a-zA-Z_]\w*)\s*=\s*(.+)", texto)
+            if not m:
+                raise ValueError(f"Instrucción no reconocida: '{texto}'")
+            codigo.append(f"{m.group(1)} = {expresion_a_tres(m.group(2), codigo)}")
+            i += 1
+    return i
+
+
+def dar_formato(codigo): # acomoda la sangría final: etiquetas y func/endfunc a la izquierda, lo de dentro de la función con 4 espacios
+    final = []
+    en_funcion = False
+    for linea in codigo:
+        if linea.startswith("func "):
+            en_funcion = True
+            final.append(linea)
+        elif linea == "endfunc":
+            en_funcion = False
+            final.append(linea)
+        elif linea.endswith(":"): # las etiquetas (L1:) siempre van a la izquierda
+            final.append(linea)
+        elif en_funcion:
+            final.append("    " + linea)
+        else:
+            final.append(linea)
+    return final
+
+
+def algoritmo_a_tres(fuente): # lee el algoritmo completo y regresa las líneas en tres direcciones
+    numero["T"] = 1 # se reinician los contadores
+    numero["L"] = 1
+    registro["polaca"] = []
+    lineas = [] # cada línea se guarda como (sangría, texto)
+    for linea in fuente.splitlines():
+        linea = linea.replace("\t", "    ").rstrip()
+        linea = re.sub(r"^\s*>>>\s?", "", linea) # por si se copió con el prompt de Python
+        if not linea.strip() or linea.strip().startswith("#"): # se ignoran líneas vacías y comentarios
+            continue
+        lineas.append((len(linea) - len(linea.lstrip()), linea.strip()))
+    codigo = []
+    traducir_bloque(lineas, 0, 0, codigo)
+    return dar_formato(codigo)
+
+
+def tres_a_cuadruplas(tres_dir): # convierte cada línea de tres direcciones en su cuádrupla (operador, arg1, arg2, resultado)
+    cuadruplas = []
+    for linea in tres_dir:
+        linea = linea.strip()
+        asignacion = re.fullmatch(r"(\w+) = (.+)", linea)
+        if linea.endswith(":"): # etiqueta
+            cuadruplas.append(("label", "-", "-", linea[:-1]))
+        elif asignacion: # T1 = b * c, T1 = -a, x = T1, T2 = call f, 1
+            destino, resto = asignacion.groups()
+            llamada = re.fullmatch(r"call (\w+), (\d+)", resto)
+            partes = resto.split()
+            if llamada:
+                cuadruplas.append(("call", llamada.group(1), llamada.group(2), destino))
+            elif len(partes) == 3: # operación binaria
+                cuadruplas.append((partes[1], partes[0], partes[2], destino))
+            elif resto.startswith("-"): # menos unario
+                cuadruplas.append(("~", resto[1:], "-", destino))
+            else: # asignación simple
+                cuadruplas.append(("=", resto, "-", destino))
+        elif linea.startswith("func "):
+            m = re.fullmatch(r"func (\w+)\((.*)\)", linea)
+            cuadruplas.append(("func", m.group(1), m.group(2) or "-", "-"))
+        elif linea == "endfunc":
+            cuadruplas.append(("endfunc", "-", "-", "-"))
+        elif linea.startswith("goto "):
+            cuadruplas.append(("goto", "-", "-", linea[5:]))
+        elif linea.startswith(("if ", "ifFalse ")):
+            m = re.fullmatch(r"(if|ifFalse) (.+) (==|!=|<=|>=|<|>) (.+) goto (\w+)", linea)
+            cuadruplas.append((m.group(1) + m.group(3), m.group(2), m.group(4), m.group(5)))
+        elif linea.startswith("param "):
+            cuadruplas.append(("param", linea[6:], "-", "-"))
+        elif linea == "return" or linea.startswith("return "):
+            cuadruplas.append(("return", linea[6:].strip() or "-", "-", "-"))
+        else: # llamada sin resultado: call print, 1
+            m = re.fullmatch(r"call (\w+), (\d+)", linea)
+            cuadruplas.append(("call", m.group(1), m.group(2), "-"))
+    return cuadruplas
+
+
+def procesar_algoritmo(archivo_entrada="factorial.code", archivo_salida="factorial.txt"): #lee el algoritmo, muestra sus tres formas y guarda las tres direcciones en un .txt
+    if not os.path.exists(archivo_entrada) and archivo_entrada == "factorial.code": # si no existe factorial.code se crea con el algoritmo del factorial
+        with open(archivo_entrada, "w", encoding="utf-8") as f:
+            f.write(FACTORIAL_CODE)
+    try:
+        with open(archivo_entrada, encoding="utf-8") as f:
+            fuente = f.read()
+    except FileNotFoundError:
+        print(f"No se encontró el archivo: {archivo_entrada}")
+        return
+    print(f"ALGORITMO DE ENTRADA ({archivo_entrada}):")
+    print("-" * 20)
+    print(fuente)
+    print("-" * 20)
+    try:
+        tres_dir = algoritmo_a_tres(fuente)
+        cuadruplas = tres_a_cuadruplas(tres_dir)
+    except (ValueError, IndexError, AttributeError) as error:
+        print(f"\nError: {error}")
+        return
+    print("\na) Polaca Inversa (de cada expresión):")
+    for linea in registro["polaca"]:
+        print(f"   {linea}")
+    print("\nb) Tres Direcciones:")
+    for linea in tres_dir:
+        print(f"   {linea}")
+    print("\nc) Cuadrupletas:")
+    for op, arg1, arg2, res in cuadruplas:
+        print(f"   ({op}, {arg1}, {arg2}, {res})")
+    with open(archivo_salida, "w", encoding="utf-8") as f: # se guardan las tres direcciones en el .txt
+        f.write("\n".join(tres_dir) + "\n")
+    print("-" * 20)
+    print(f"Archivo guardado: {archivo_salida}\n")
 
 # Se ejecuata el ejemplo y se establecio un while para que siga repitiendo hasta que el usuario quiera salir
 if __name__ == "__main__":
-    ejemplo = "a+b*c+d"
-    procesar_expresion(ejemplo)
+    archivo = sys.argv[1] if len(sys.argv) > 1 else "factorial.code" # se puede indicar otro algoritmo: python compilador_intermedio.py otro.code
+    procesar_algoritmo(archivo, os.path.splitext(archivo)[0] + ".txt") # traduce el algoritmo de forma automática y genera su .txt
 
     while True:
         expresion = input("Ingresa una expresión (o 'salir' para terminar): ")

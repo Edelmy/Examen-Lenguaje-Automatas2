@@ -1,0 +1,24 @@
+func factorial(n)
+    if n == 0 goto L1
+    if n == 1 goto L1
+    if n > 1 goto L2
+    goto L3
+L1:
+    resultado = 1
+    goto L4
+L2:
+    T1 = n - 1
+    param T1
+    T2 = call factorial, 1
+    T3 = n * T2
+    resultado = T3
+    goto L4
+L3:
+L4:
+    return resultado
+endfunc
+param 5
+T4 = call factorial, 1
+fact5 = T4
+param fact5
+call print, 1
