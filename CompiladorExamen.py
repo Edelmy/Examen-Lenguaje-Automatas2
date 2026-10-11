@@ -1,6 +1,5 @@
 import re #Se importa la libreria del regex
-import os # NUEVO: sirve para revisar si existe el archivo factorial.code
-import sys # NUEVO: sirve para recibir el nombre del archivo del algoritmo desde la CMD
+import os #sirve para revisar si existe el archivo factorial.code
 
 PRECEDENCE = {'+': 1, '-': 1, '*': 2, '/': 2, '^': 3} #Prioridad de las operaciones
 PRECEDENCE['~'] = 2.5 # '~' representa el menos unario (-a) Se resuelve antes que + y -
@@ -211,7 +210,7 @@ def expresion_a_tres(expresion, codigo): # convierte una expresión a tres direc
     if es_operando(expresion): # si ya es un solo operando no hay nada que calcular
         return expresion
     postfix_tokens = infix_to_postfix(expresion) # se reutiliza el código de la práctica
-    registro["polaca"].append(f"{expresion}   →   {' '.join(postfix_tokens)}") # se guarda su polaca inversa
+    registro["polaca"].append(f"{expresion}  ->  {' '.join(postfix_tokens)}") # se guarda su polaca inversa
     lineas_tres, _ = generar_representaciones_intermedias(postfix_tokens, numero["T"])
     numero["T"] += len(lineas_tres) # cada instrucción usa un temporal
     codigo.extend(lineas_tres)
@@ -229,7 +228,7 @@ def comparar(parte, codigo): # resuelve los dos lados de una comparación, guard
     izq, op, der = separar_comparacion(parte)
     lugar_izq = expresion_a_tres(izq, codigo)
     lugar_der = expresion_a_tres(der, codigo)
-    registro["polaca"].append(f"{parte.strip()}   →   {lugar_izq} {lugar_der} {op}")
+    registro["polaca"].append(f"{parte.strip()}  ->  {lugar_izq} {lugar_der} {op}")
     return f"{lugar_izq} {op} {lugar_der}"
 
 
@@ -245,7 +244,7 @@ def condicion_a_tres(condicion, etiqueta_si, codigo): # genera los saltos de una
         codigo.append(f"if {comparar(parte, codigo)} goto {etiqueta_si}")
 
 
-def traducir_cuerpo(lineas, i, codigo): # traduce el cuerpo que empieza en la línea i (todas las líneas con esa misma sangría)
+def traducir_cuerpo(lineas, i, codigo): #  traduce el cuerpo que empieza en la línea i (todas las líneas con esa misma sangría)
     return traducir_bloque(lineas, i, lineas[i][0], codigo)
 
 
@@ -354,7 +353,7 @@ def algoritmo_a_tres(fuente): # lee el algoritmo completo y regresa las líneas 
     return dar_formato(codigo)
 
 
-def tres_a_cuadruplas(tres_dir): # convierte cada línea de tres direcciones en su cuádrupla (operador, arg1, arg2, resultado)
+def tres_a_cuadruplas(tres_dir): #convierte cada línea de tres direcciones en su cuádrupla (operador, arg1, arg2, resultado)
     cuadruplas = []
     for linea in tres_dir:
         linea = linea.strip()
@@ -393,44 +392,54 @@ def tres_a_cuadruplas(tres_dir): # convierte cada línea de tres direcciones en 
     return cuadruplas
 
 
-def procesar_algoritmo(archivo_entrada="factorial.code", archivo_salida="factorial.txt"): #lee el algoritmo, muestra sus tres formas y guarda las tres direcciones en un .txt
-    if not os.path.exists(archivo_entrada) and archivo_entrada == "factorial.code": # si no existe factorial.code se crea con el algoritmo del factorial
-        with open(archivo_entrada, "w", encoding="utf-8") as f:
-            f.write(FACTORIAL_CODE)
-    try:
-        with open(archivo_entrada, encoding="utf-8") as f:
-            fuente = f.read()
-    except FileNotFoundError:
-        print(f"No se encontró el archivo: {archivo_entrada}")
+def leer_algoritmo(): #pide el algoritmo por la terminal y regresa (texto, nombre del archivo o None)
+    print(f"Carpeta actual: {os.getcwd()}") # aquí se buscan los archivos y aquí se guarda el .txt
+    print("Escribe o pega el algoritmo a analizar y termina con una línea que diga: fin")
+    print("(también puedes escribir el nombre de un archivo, por ejemplo factorial.code, o dejar vacío para usar el factorial de ejemplo)")
+    primera = input("> ")
+    if not primera.strip(): # Enter solo es para cuando se usa el factorial del documento
+        return FACTORIAL_CODE, None
+    if os.path.isfile(primera.strip()): # si lo escrito es un archivo que existe, se lee
+        with open(primera.strip(), encoding="utf-8") as f:
+            return f.read(), primera.strip()
+    if re.fullmatch(r"[\w\-. ]+\.\w+", primera.strip()): # parece un nombre de archivo (factorial.code) pero no existe en esta carpeta
+        print(f"\nNo encontré el archivo '{primera.strip()}' en la carpeta actual. Revisa el nombre o ejecuta de nuevo y pega el código.\n")
+        return None, None
+    lineas = [primera]
+    while lineas[-1].strip().lower() != "fin": # se sigue leyendo hasta que se escriba "fin"
+        lineas.append(input("> "))
+    return "\n".join(lineas[:-1]), None
+
+
+def procesar_algoritmo(): #pide el algoritmo, muestra sus tres formas en la terminal y guarda todo en un .txt
+    fuente, archivo = leer_algoritmo()
+    if fuente is None: # el archivo escrito no existe, ya se avisó
         return
-    print(f"ALGORITMO DE ENTRADA ({archivo_entrada}):")
-    print("-" * 20)
-    print(fuente)
-    print("-" * 20)
+    if not fuente.strip():
+        print("\nNo se escribió ningún algoritmo.\n")
+        return
     try:
         tres_dir = algoritmo_a_tres(fuente)
         cuadruplas = tres_a_cuadruplas(tres_dir)
     except (ValueError, IndexError, AttributeError) as error:
-        print(f"\nError: {error}")
+        print(f"\nError: {error}\n")
         return
-    print("\na) Polaca Inversa (de cada expresión):")
-    for linea in registro["polaca"]:
-        print(f"   {linea}")
-    print("\nb) Tres Direcciones:")
-    for linea in tres_dir:
-        print(f"   {linea}")
-    print("\nc) Cuadrupletas:")
-    for op, arg1, arg2, res in cuadruplas:
-        print(f"   ({op}, {arg1}, {arg2}, {res})")
-    with open(archivo_salida, "w", encoding="utf-8") as f: # se guardan las tres direcciones en el .txt
-        f.write("\n".join(tres_dir) + "\n")
-    print("-" * 20)
-    print(f"Archivo guardado: {archivo_salida}\n")
+    reporte = ["ALGORITMO DE ENTRADA:", "-" * 20] + fuente.rstrip().splitlines() # el reporte es lo que se imprime y lo que se guarda en el .txt
+    reporte += ["", "a) Polaca Inversa (de cada expresión):"] + [f"   {linea}" for linea in registro["polaca"]]
+    reporte += ["", "b) Tres Direcciones:"] + [f"   {linea}" for linea in tres_dir]
+    reporte += ["", "c) Cuadrupletas:"] + [f"   ({op}, {arg1}, {arg2}, {res})" for op, arg1, arg2, res in cuadruplas]
+    print("\n" + "\n".join(reporte))
+    por_defecto = (os.path.splitext(archivo)[0] if archivo else "factorial") + ".txt"
+    nombre = input(f"\nNombre del archivo .txt a generar (Enter = {por_defecto}): ").strip() or por_defecto
+    if not nombre.lower().endswith(".txt"):
+        nombre += ".txt"
+    with open(nombre, "w", encoding="utf-8") as f: # se guarda todo en el .txt
+        f.write("\n".join(reporte) + "\n")
+    print(f"Archivo guardado en: {os.path.abspath(nombre)}\n")
 
 # Se ejecuata el ejemplo y se establecio un while para que siga repitiendo hasta que el usuario quiera salir
 if __name__ == "__main__":
-    archivo = sys.argv[1] if len(sys.argv) > 1 else "factorial.code" # se puede indicar otro algoritmo: python compilador_intermedio.py otro.code
-    procesar_algoritmo(archivo, os.path.splitext(archivo)[0] + ".txt") # traduce el algoritmo de forma automática y genera su .txt
+    procesar_algoritmo() # pide el algoritmo, lo traduce de forma automática y genera el .txt
 
     while True:
         expresion = input("Ingresa una expresión (o 'salir' para terminar): ")
